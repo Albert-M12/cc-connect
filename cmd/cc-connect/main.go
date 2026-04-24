@@ -380,6 +380,24 @@ func main() {
 			engine.SetStreamPreviewCfg(spcfg)
 		}
 
+		// Wire sentence split
+		{
+			sscfg := core.DefaultSentenceSplitCfg()
+			if cfg.SentenceSplit.Enabled != nil {
+				sscfg.Enabled = *cfg.SentenceSplit.Enabled
+			}
+			if cfg.SentenceSplit.Delimiter != nil {
+				sscfg.Delimiter = *cfg.SentenceSplit.Delimiter
+			}
+			if cfg.SentenceSplit.MinDelay != nil {
+				sscfg.MinDelay = *cfg.SentenceSplit.MinDelay
+			}
+			if cfg.SentenceSplit.MaxDelay != nil {
+				sscfg.MaxDelay = *cfg.SentenceSplit.MaxDelay
+			}
+			engine.SetSentenceSplitCfg(sscfg)
+		}
+
 		// Wire rate limiting
 		{
 			maxMsg := 20
