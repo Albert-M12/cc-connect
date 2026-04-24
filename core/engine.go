@@ -947,6 +947,69 @@ func (e *Engine) ActiveSessionKeys() []string {
 	return keys
 }
 
+// KnownSessionKeys returns all distinct user session keys the engine has
+// observed via its session store, whether currently active or not.
+func (e *Engine) KnownSessionKeys() []string {
+	idToKey, _ := e.sessions.SessionKeyMap()
+	seen := make(map[string]bool)
+	var keys []string
+	for _, userKey := range idToKey {
+		if !seen[userKey] {
+			seen[userKey] = true
+			keys = append(keys, userKey)
+		}
+	}
+	return keys
+}
+
+// InjectMessage injects a message into a session as if the user sent it.
+// Used by the /inject HTTP endpoint so external daemons can drive Claude
+// Code proactively. For the cron-triggered path, see ExecuteCronJob.
+func (e *Engine) InjectMessage(sessionKey, message string) error {
+	platformName := ""
+	if idx := strings.Index(sessionKey, ":"); idx > 0 {
+		platformName = sessionKey[:idx]
+	}
+
+	var targetPlatform Platform
+	for _, p := range e.platforms {
+		if p.Name() == platformName {
+			targetPlatform = p
+			break
+		}
+	}
+	if targetPlatform == nil {
+		return fmt.Errorf("platform %q not found for session %q", platformName, sessionKey)
+	}
+
+	rc, ok := targetPlatform.(ReplyContextReconstructor)
+	if !ok {
+		return fmt.Errorf("platform %q does not support reply context reconstruction", platformName)
+	}
+
+	replyCtx, err := rc.ReconstructReplyCtx(sessionKey)
+	if err != nil {
+		return fmt.Errorf("reconstruct reply context: %w", err)
+	}
+
+	msg := &Message{
+		SessionKey: sessionKey,
+		Platform:   platformName,
+		UserID:     "inject",
+		UserName:   "inject",
+		Content:    message,
+		ReplyCtx:   replyCtx,
+	}
+
+	session := e.sessions.GetOrCreateActive(sessionKey)
+	if !session.TryLock() {
+		return fmt.Errorf("session %q is busy", sessionKey)
+	}
+
+	e.processInteractiveMessageWith(targetPlatform, msg, session, e.agent, e.sessions, sessionKey, "", sessionKey)
+	return nil
+}
+
 // ExecuteCronJob runs a cron job by injecting a synthetic message into the engine.
 // It finds the platform that owns the session key, reconstructs a reply context,
 // and processes the message as if the user sent it.
