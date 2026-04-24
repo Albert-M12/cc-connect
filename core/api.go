@@ -68,6 +68,7 @@ func NewAPIServer(dataDir string) (*APIServer, error) {
 	s.mux.HandleFunc("/cron/info", s.handleCronInfo)
 	s.mux.HandleFunc("/cron/edit", s.handleCronEdit)
 	s.mux.HandleFunc("/cron/del", s.handleCronDel)
+	s.mux.HandleFunc("/inject", s.handleInject)
 	s.mux.HandleFunc("/relay/send", s.handleRelaySend)
 	s.mux.HandleFunc("/relay/bind", s.handleRelayBind)
 	s.mux.HandleFunc("/relay/binding", s.handleRelayBinding)
@@ -201,6 +202,67 @@ func (s *APIServer) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiJSON(w, http.StatusOK, result)
+}
+
+// ── Inject API ────────────────────────────────────────────────
+
+func (s *APIServer) handleInject(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SendRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Message == "" {
+		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve engine
+	s.mu.RLock()
+	engine, ok := s.engines[req.Project]
+	s.mu.RUnlock()
+
+	if !ok {
+		s.mu.RLock()
+		if len(s.engines) == 1 {
+			for _, e := range s.engines {
+				engine = e
+				ok = true
+			}
+		}
+		s.mu.RUnlock()
+	}
+
+	if !ok {
+		http.Error(w, fmt.Sprintf("project %q not found", req.Project), http.StatusNotFound)
+		return
+	}
+
+	// Resolve session_key: use provided, or pick first active/known session
+	sessionKey := req.SessionKey
+	if sessionKey == "" {
+		keys := engine.ActiveSessionKeys()
+		if len(keys) == 0 {
+			keys = engine.KnownSessionKeys()
+		}
+		if len(keys) == 0 {
+			http.Error(w, "no active or known sessions", http.StatusServiceUnavailable)
+			return
+		}
+		sessionKey = keys[0]
+	}
+
+	if err := engine.InjectMessage(sessionKey, req.Message); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	apiJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ── Cron API ───────────────────────────────────────────────────
